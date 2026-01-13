@@ -1,0 +1,214 @@
+!pip install wfdb scikit-learn matplotlib seaborn
+
+
+import os
+import ast
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import wfdb
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MultiLabelBinarizer
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+import tensorflow as tf
+from tensorflow.keras import layers, models
+
+
+#Step 2: Load Annotations and SCP Mapping
+# Set paths
+BASE_PATH = 'C:/Users/katya/Downloads/deep dataset/ptb-xl-a-large-publicly-available-electrocardiography-dataset-1.0.1'  # CHANGE THIS to your actual path
+RECORDS_PATH = os.path.join(BASE_PATH, 'records100/')  # or 'records500/'
+
+# Load metadata
+df = pd.read_csv(os.path.join(BASE_PATH, 'ptbxl_database.csv'), index_col='ecg_id')
+df.scp_codes = df.scp_codes.apply(lambda x: ast.literal_eval(x))
+
+# Load diagnostic superclass mappings
+scp = pd.read_csv(os.path.join(BASE_PATH, 'scp_statements.csv'), index_col=0)
+scp = scp[scp.diagnostic == 1]
+
+def aggregate_diagnostic(y_dic):
+    return list(set([scp.loc[k].diagnostic_class for k in y_dic if k in scp.index]))
+
+df['diagnostic_superclass'] = df.scp_codes.apply(aggregate_diagnostic)
+df = df[df.diagnostic_superclass.map(len) > 0]  # Remove empty labels
+
+
+
+df
+
+
+
+# Step 3: Load ECG Signal Data
+
+def load_ecg_data(df, sampling_rate=100):
+    signals = []
+    i=0
+    for f in df.filename_lr:
+        if i%1000==0:
+            print(f"{i} completed")
+        i+=1
+        record_path = os.path.join(BASE_PATH, f)
+        signal, _ = wfdb.rdsamp(record_path)
+        signals.append(signal)
+    return np.array(signals)
+
+X = load_ecg_data(df)
+print("Shape of ECG data:", X.shape)
+
+
+
+
+
+#Step 4: Label Binarization and Train-Test Split
+mlb = MultiLabelBinarizer()
+y = mlb.fit_transform(df.diagnostic_superclass)
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print("Labels:", mlb.classes_)
+print("Train shape:", X_train.shape, y_train.shape)
+
+
+
+#MODEL WITH SIMPLE 1D CNN MODEL
+
+
+
+#Step 5: Build a Simple 1D CNN Model
+input_shape = X_train.shape[1:]  # (length, leads)
+
+model = models.Sequential([
+    layers.Conv1D(32, kernel_size=5, activation='relu', input_shape=input_shape),
+    layers.MaxPooling1D(pool_size=2),
+    layers.Conv1D(64, kernel_size=5, activation='relu'),
+    layers.MaxPooling1D(pool_size=2),
+    layers.Flatten(),
+    layers.Dense(128, activation='relu'),
+    layers.Dropout(0.5),
+    layers.Dense(y_train.shape[1], activation='sigmoid')  # Multi-label classification
+])
+
+model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+model.summary()
+
+
+#train the model
+history = model.fit(X_train, y_train, validation_split=0.2, epochs=10, batch_size=32)
+
+
+
+#evaluate model
+y_pred = model.predict(X_test)
+y_pred_bin = (y_pred > 0.5).astype(int)
+
+print("Classification Report:")
+print(classification_report(y_test, y_pred_bin, target_names=mlb.classes_))
+
+# Confusion matrix for multi-label (example: only for first label)
+conf = confusion_matrix(y_test[:, 0], y_pred_bin[:, 0])
+sns.heatmap(conf, annot=True, fmt="d", xticklabels=["No", "Yes"], yticklabels=["No", "Yes"])
+plt.title(f"Confusion Matrix for: {mlb.classes_[0]}")
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.show()
+
+
+
+# NOW A CNN+LSTM HYBRID MODEL
+
+
+#1. Label Encoding done previously, so no need
+#2. from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)# kyuki y is already one-hot encoded
+
+
+
+ #3. For evaluation, convert predictions and labels back to class indices:
+
+import numpy as np
+from sklearn.metrics import classification_report, confusion_matrix
+
+y_pred_probs = model.predict(X_test)
+y_pred = np.argmax(y_pred_probs, axis=1)
+y_true = np.argmax(y_test, axis=1)
+
+print(classification_report(y_true, y_pred))  # Optional: add target_names=your_label_list
+
+
+#4. Confusion Matrix Visualization
+
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import confusion_matrix
+
+# Convert one-hot labels to class indices
+y_pred_probs = model.predict(X_test)
+y_pred = np.argmax(y_pred_probs, axis=1)
+y_true = np.argmax(y_test, axis=1)
+
+# If you already have class names:
+class_names = ['CD', 'HYP', 'MI', 'NORM', 'STTC']  # Replace with your actual label names
+
+# Confusion matrix
+cm = confusion_matrix(y_true, y_pred)
+
+# Plot
+plt.figure(figsize=(8, 6))
+sns.heatmap(cm, annot=True, fmt='d', xticklabels=class_names, yticklabels=class_names, cmap='Blues')
+plt.xlabel("Predicted")
+plt.ylabel("True")
+plt.title("Confusion Matrix")
+plt.show()
+
+
+
+# Take a sample from ECG test set
+
+idx = 0  # any index from 0 to len(X_test)-1
+sample = X_test[idx]
+true_label = y_test[idx]
+
+# Predict
+pred = model.predict(np.expand_dims(sample, axis=0))  # add batch dimension
+pred_bin = (pred > 0.5).astype(int)
+
+# Show results
+print("True multi-hot label:", true_label)
+print("Predicted binary label:", pred_bin)
+print("Predicted probabilities:", pred)
+
+
+# 2D CNN HERE
+
+
+# 2D CNN for ECG Images
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+
+input_shape = (224, 224, 1)  # adjust if your images are differently sized
+
+image_model = Sequential([
+    Conv2D(32, (3, 3), activation='relu', input_shape=input_shape, name='conv2d_1'),
+    MaxPooling2D((2, 2)),
+
+    Conv2D(64, (3, 3), activation='relu', name='conv2d_2'),
+    MaxPooling2D((2, 2)),
+
+    Flatten(),
+    Dense(128, activation='relu'),
+    Dropout(0.5),
+    Dense(5, activation='softmax')  # adjust 5 to number of classes
+])
+
+image_model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+image_model.summary()
+
+# Train only if needed
+# image_model.fit(X_train_images, y_train, validation_split=0.2, epochs=10, batch_size=32)
+
+
+for i, layer in enumerate(image_model.layers):
+    print(f"{i}: {layer.name} — {layer.output_shape}")
