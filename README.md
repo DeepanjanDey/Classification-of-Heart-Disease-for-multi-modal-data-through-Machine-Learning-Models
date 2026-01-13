@@ -1,0 +1,1 @@
+This is a machine learning project which was developed in 2 phases where the first phase is a binary label classification using traditional machine learning models to detect whether the patient has a disease or not and in the second phase it was a multi label classification using deep learning models where it detected the type of disease.
